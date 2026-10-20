@@ -47,6 +47,15 @@ class Rig:
         seq = self.out.seq_id if seq_id is None else seq_id
         self.vision = replace(self.vision, result_seq_id=seq, result=result)
 
+    def wait_for_verdict(self, max_cycles: int = 20) -> Verdict:
+        """Cycle until the request is decided. Bounded, so a bug fails instead of hanging."""
+        for _ in range(max_cycles):
+            if self.state() in (State.ACCEPT, State.REJECT):
+                assert self.plc.last_verdict is not None
+                return self.plc.last_verdict
+            self.cycle()
+        raise AssertionError(f"no verdict after {max_cycles} cycles, state {self.state()}")
+
     def trigger(self, part_id: int = 100) -> None:
         """Request an inspection and run cycles until the PLC waits for a result."""
         assert self.plc.request_inspection(part_id)
@@ -127,7 +136,7 @@ def test_no_result_times_out_exactly_at_deadline() -> None:
     assert rig.plc.last_verdict.reason is RejectReason.TIMEOUT
 
 
-def test_previous_parts_result_is_never_accepted() -> None:
+def test_previous_parts_result_is_never_accepted_and_is_not_stale() -> None:
     rig = Rig()
     rig.trigger()
     rig.answer(Result.OK)
@@ -135,13 +144,44 @@ def test_previous_parts_result_is_never_accepted() -> None:
     rig.cycle()  # back to IDLE; DB11 still says (seq 1, OK)
 
     rig.trigger()  # seq 2
-    for _ in range(10):  # bounded, so a broken timeout fails instead of hanging
-        if rig.state() is not State.WAIT_RESULT:
-            break
-        rig.cycle()  # the old (seq 1, OK) is on DB11 every cycle; it must never count
-    assert rig.plc.last_verdict == Verdict(
+    # The old (seq 1, OK) sits on DB11 every cycle. It must never count, and since
+    # vision never wrote anything new, the reason is TIMEOUT, not STALE_RESULT.
+    assert rig.wait_for_verdict() == Verdict(
         seq_id=2, part_id=100, accepted=False, reason=RejectReason.TIMEOUT
     )
+
+
+def test_db11_changing_to_another_seq_rejects_as_stale() -> None:
+    rig = Rig()
+    rig.trigger()  # seq 1
+    rig.answer(Result.OK, seq_id=99)  # vision answers a request we never made
+    assert rig.wait_for_verdict() == Verdict(
+        seq_id=1, part_id=100, accepted=False, reason=RejectReason.STALE_RESULT
+    )
+
+
+def test_matching_result_after_a_stale_one_still_counts() -> None:
+    rig = Rig()
+    rig.trigger()
+    rig.answer(Result.OK, seq_id=99)
+    rig.cycle()  # stale seen, still waiting
+    assert rig.state() is State.WAIT_RESULT
+    rig.answer(Result.OK)  # now the answer for our seq
+    assert rig.wait_for_verdict().accepted
+
+
+def test_not_ready_rejects_without_triggering() -> None:
+    rig = Rig()
+    rig.vision = replace(rig.vision, ready=False)
+    assert rig.plc.request_inspection(part_id=5)
+    out = rig.cycle()
+    assert rig.state() is State.REJECT
+    assert (out.trigger, out.seq_id) == (False, 0)  # nothing was sent to vision
+    assert rig.plc.last_verdict == Verdict(
+        seq_id=0, part_id=5, accepted=False, reason=RejectReason.NOT_READY
+    )
+    rig.cycle()
+    assert rig.state() is State.IDLE
 
 
 def test_request_is_refused_while_busy() -> None:
