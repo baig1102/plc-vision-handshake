@@ -31,11 +31,6 @@ python_version = "3.11"
 strict = true
 files = ["src", "tests"]
 
-[[tool.mypy.overrides]]
-# python-snap7 ships without type hints
-module = ["snap7", "snap7.*"]
-ignore_missing_imports = true
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
