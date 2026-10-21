@@ -190,11 +190,16 @@ class PlcLogic:
         self._state = State.TRIGGERED
 
     def _watch_for_stale(self, inputs: VisionToPlc) -> None:
-        # Stale = vision *wrote something new* during our wait, but for a different
-        # request. Only used to name the reject reason; a stale result is never
-        # evaluated, and a later matching result still counts.
+        # Stale = vision *wrote a result* during our wait, but for a different
+        # request. A cleared DB11 (e.g. after a vision restart) carries no result,
+        # so it is not stale. Only used to name the reject reason; a stale result
+        # is never evaluated, and a later matching result still counts.
         db11 = (inputs.result_seq_id, inputs.result)
-        if db11 != self._db11_at_trigger and inputs.result_seq_id != self._seq_id:
+        if (
+            db11 != self._db11_at_trigger
+            and inputs.result_seq_id != self._seq_id
+            and inputs.result is not Result.NONE
+        ):
             self._saw_stale = True
 
     def _evaluate_result(self, inputs: VisionToPlc, now: float) -> None:
