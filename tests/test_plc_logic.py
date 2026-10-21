@@ -162,6 +162,20 @@ def test_db11_changing_to_another_seq_rejects_as_stale() -> None:
     )
 
 
+def test_db11_cleared_by_a_vision_restart_is_not_stale() -> None:
+    rig = Rig()
+    rig.trigger()
+    rig.answer(Result.OK)
+    rig.cycle()  # seq 1 accepted; DB11 keeps (seq 1, OK)
+    rig.cycle()
+
+    rig.trigger()  # seq 2, snapshot is (1, OK)
+    rig.answer(Result.NONE, seq_id=0)  # vision restarts and clears DB11 to all-zero
+    assert rig.wait_for_verdict() == Verdict(
+        seq_id=2, part_id=100, accepted=False, reason=RejectReason.TIMEOUT
+    )
+
+
 def test_matching_result_after_a_stale_one_still_counts() -> None:
     rig = Rig()
     rig.trigger()
