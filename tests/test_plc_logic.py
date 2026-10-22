@@ -8,6 +8,7 @@ from plc_vision_handshake.plc_logic import (
     RejectReason,
     State,
     StateChanged,
+    Triggered,
     Verdict,
     VerdictMade,
 )
@@ -335,6 +336,7 @@ def test_events_for_an_accepted_part_in_order() -> None:
     rig.cycle()  # t=1.00
     accepted = Verdict(seq_id=1, part_id=8, accepted=True)
     assert rig.plc.drain_events() == [
+        Triggered(0.25, seq_id=1, part_id=8),
         StateChanged(0.25, State.IDLE, State.TRIGGERED),
         StateChanged(0.50, State.TRIGGERED, State.WAIT_RESULT),
         VerdictMade(0.75, accepted),  # the verdict comes before the state it causes

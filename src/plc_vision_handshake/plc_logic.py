@@ -74,12 +74,21 @@ class StateChanged:
 
 
 @dataclass(frozen=True)
+class Triggered:
+    """The PLC has just set trigger=1 for this request."""
+
+    time: float
+    seq_id: int
+    part_id: int
+
+
+@dataclass(frozen=True)
 class VerdictMade:
     time: float
     verdict: Verdict
 
 
-Event: TypeAlias = StateChanged | VerdictMade
+Event: TypeAlias = StateChanged | Triggered | VerdictMade
 
 
 @dataclass(frozen=True)
@@ -225,6 +234,7 @@ class PlcLogic:
         self._db11_at_trigger = (inputs.result_seq_id, inputs.result)
         self._saw_stale = False
         self._state = State.TRIGGERED
+        self._events.append(Triggered(now, self._seq_id, part_id))
 
     def _watch_for_stale(self, inputs: VisionToPlc) -> None:
         # Stale = vision *wrote a result* during our wait, but for a different
