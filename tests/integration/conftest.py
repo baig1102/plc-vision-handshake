@@ -11,8 +11,10 @@ from plc_vision_handshake.protocol import Result
 from plc_vision_handshake.vision_client import VisionClient
 
 # Wider watchdog window than the default 0.5 s: vision has to connect within it
-# from startup, and CI runners can be slow.
-CONFIG = PlcConfig(result_timeout_s=1.0, watchdog_timeout_s=1.0)
+# from startup, and CI runners can be slow. The result timeout must stay longer
+# than the watchdog window: vision freezes a little *after* the trigger, so with
+# equal windows a hung vision would show up as TIMEOUT instead of WATCHDOG.
+CONFIG = PlcConfig(result_timeout_s=1.5, watchdog_timeout_s=1.0)
 STARTUP_TIMEOUT_S = 5.0
 
 

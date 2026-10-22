@@ -1,6 +1,6 @@
 """One test per fault scenario, over a real S7 connection.
 
-Timing (conftest): result timeout 1.0 s, PLC watchdog 1.0 s, 10 ms cycles.
+Timing (conftest): result timeout 1.5 s, PLC watchdog 1.0 s, 10 ms cycles.
 Every wait blocks on an event or queue with a deadline; nothing sleeps.
 """
 
