@@ -1,5 +1,5 @@
 from plc_vision_handshake.protocol import PlcToVision, Result
-from plc_vision_handshake.vision_client import VisionLogic, random_inspector
+from plc_vision_handshake.vision_client import VisionFaults, VisionLogic, random_inspector
 
 
 class CountingInspector:
@@ -63,3 +63,22 @@ def test_frozen_plc_heartbeat_drops_ready_and_blocks_new_inspections() -> None:
     out = vision.step(db10(2, trigger=True, seq_id=1, part_id=9), now=0.75)  # PLC is back
     assert out.ready is True
     assert inspector.calls == [9]
+
+
+def test_stale_seq_fault_answers_with_the_previous_seq_id() -> None:
+    vision = VisionLogic(CountingInspector(), latency_s=0.0, faults=VisionFaults(stale_seq=True))
+    out = vision.step(db10(1, trigger=True, seq_id=5), now=0.0)
+    assert (out.result_seq_id, out.result) == (4, Result.OK)
+
+
+def test_freeze_heartbeat_fault_hangs_at_the_first_inspection() -> None:
+    inspector = CountingInspector()
+    vision = VisionLogic(inspector, latency_s=0.0, faults=VisionFaults(freeze_heartbeat=True))
+    assert vision.step(db10(1, trigger=False, seq_id=0), now=0.0).heartbeat_echo == 1
+
+    frozen = vision.step(db10(2, trigger=True, seq_id=1), now=0.25)  # hangs here
+    for hb in range(3, 10):
+        assert vision.step(db10(hb, trigger=True, seq_id=1), now=hb * 0.25) == frozen
+    assert frozen.heartbeat_echo == 2
+    assert (frozen.result_seq_id, frozen.result) == (0, Result.NONE)  # never answers
+    assert inspector.calls == []
