@@ -5,7 +5,7 @@ Every wait blocks on an event or queue with a deadline; nothing sleeps.
 """
 
 import pytest
-from watcher import WAIT_TIMEOUT_S, PlcWatcher, StartVision
+from watcher import WAIT_TIMEOUT_S, GatedVisionClient, PlcWatcher, StartVision
 
 from plc_vision_handshake.fake_plc import FakePlc
 from plc_vision_handshake.plc_logic import Event, RejectReason, State, StateChanged, Verdict
@@ -84,11 +84,14 @@ def test_vision_restart_recovers_after_reset_without_reusing_the_old_result(
     plc.reset()
     watcher.wait_for(is_reset, "FAULT -> IDLE after reset")
     inspector = RecordingInspector()
-    start_vision(inspect=inspector)
+    second = start_vision(client_class=GatedVisionClient, inspect=inspector)
+    assert isinstance(second, GatedVisionClient)
 
-    # The new instance's first write replaced the leftover before anything else.
+    # Its loop hasn't polled yet, so only the first write inside start() can have
+    # replaced the leftover: DB11 must already be clean at this point.
     clean = plc.read_db11()
     assert (clean.result_seq_id, clean.result, clean.ready) == (0, Result.NONE, True)
+    second.gate.set()
 
     plc.submit_part(302)
     assert watcher.verdict() == Verdict(seq_id=2, part_id=302, accepted=True)

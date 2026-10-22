@@ -49,10 +49,10 @@ def start_vision(plc: FakePlc, watcher: PlcWatcher) -> Iterator[StartVision]:
     """
     with contextlib.ExitStack() as stack:
 
-        def start(**kwargs: Any) -> VisionClient:
+        def start(client_class: type[VisionClient] = VisionClient, **kwargs: Any) -> VisionClient:
             kwargs.setdefault("inspect", always_ok)
             kwargs.setdefault("latency_s", 0.02)
-            client = VisionClient(plc.port, **kwargs)
+            client = client_class(plc.port, **kwargs)
             client.start()
             stack.callback(client.stop)
             watcher.workers.append(client)
