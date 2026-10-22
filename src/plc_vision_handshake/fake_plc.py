@@ -90,6 +90,7 @@ class FakePlc(CyclicWorker):
         self._parts: queue.Queue[int] = queue.Queue()
         self._pending_part: int | None = None
         self._reset_requested = threading.Event()
+        self._halted = threading.Event()
         self.events: queue.Queue[Event] = queue.Queue()
         self.vision_ready = threading.Event()  # set once DB11 has shown ready=True
         self.fault_seen = threading.Event()  # set on the first entry into FAULT
@@ -108,6 +109,16 @@ class FakePlc(CyclicWorker):
     def reset(self) -> None:
         """Operator acknowledge; applied by the loop at the start of the next cycle."""
         self._reset_requested.set()
+
+    def halt(self) -> None:
+        """Simulate a CPU going to STOP: the program and heartbeat stop, but the
+        S7 server keeps answering, so vision stays connected and has to notice
+        the frozen heartbeat on its own."""
+        self._halted.set()
+
+    def read_db11(self) -> protocol.VisionToPlc:
+        """What vision last wrote, read under the area lock (for tests)."""
+        return protocol.decode_vision_to_plc(self._read(protocol.VISION_TO_PLC_DB, self._db11))
 
     def wait_until_vision_ready(self, timeout_s: float) -> None:
         """Block until the PLC has read ready=True from DB11.
@@ -152,6 +163,8 @@ class FakePlc(CyclicWorker):
 
     def _step(self) -> None:
         assert self._logic is not None
+        if self._halted.is_set():
+            return
         logic = self._logic
 
         inputs = protocol.decode_vision_to_plc(self._read(protocol.VISION_TO_PLC_DB, self._db11))
