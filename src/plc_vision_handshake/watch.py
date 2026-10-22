@@ -51,6 +51,15 @@ class PlcWatcher:
         while not check():
             self._next(deadline, what, timeout_s)
 
+    def drain(self) -> None:
+        """Read whatever is already queued, without waiting."""
+        while True:
+            try:
+                event = self.plc.events.get_nowait()
+            except queue.Empty:
+                return
+            self._seen(event)
+
     def _next(self, deadline: float, what: str, timeout_s: float) -> Event | None:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -61,7 +70,10 @@ class PlcWatcher:
             for worker in self.workers:
                 worker.raise_if_failed()
             return None
+        self._seen(event)
+        return event
+
+    def _seen(self, event: Event) -> None:
         self.seen.append(event)
         if self._on_event is not None:
             self._on_event(event)
-        return event
