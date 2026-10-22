@@ -1,9 +1,9 @@
 import pytest
-from watcher import PlcWatcher
 
 from plc_vision_handshake.fake_plc import FakePlc
 from plc_vision_handshake.plc_logic import State, StateChanged, Verdict
 from plc_vision_handshake.vision_client import VisionClient
+from plc_vision_handshake.watch import PlcWatcher
 
 pytestmark = pytest.mark.integration
 

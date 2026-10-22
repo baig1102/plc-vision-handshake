@@ -3,12 +3,13 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from watcher import PlcWatcher, StartVision
+from watcher import StartVision
 
 from plc_vision_handshake.fake_plc import FakePlc
 from plc_vision_handshake.plc_logic import PlcConfig
 from plc_vision_handshake.protocol import Result
 from plc_vision_handshake.vision_client import VisionClient
+from plc_vision_handshake.watch import PlcWatcher
 
 # Wider watchdog window than the default 0.5 s: vision has to connect within it
 # from startup, and CI runners can be slow. The result timeout must stay longer

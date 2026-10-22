@@ -5,12 +5,13 @@ Every wait blocks on an event or queue with a deadline; nothing sleeps.
 """
 
 import pytest
-from watcher import WAIT_TIMEOUT_S, GatedVisionClient, PlcWatcher, StartVision
+from watcher import GatedVisionClient, StartVision
 
 from plc_vision_handshake.fake_plc import FakePlc
 from plc_vision_handshake.plc_logic import Event, RejectReason, State, StateChanged, Verdict
 from plc_vision_handshake.protocol import Result
 from plc_vision_handshake.vision_client import VisionFaults
+from plc_vision_handshake.watch import WAIT_TIMEOUT_S, PlcWatcher
 
 pytestmark = pytest.mark.integration
 
