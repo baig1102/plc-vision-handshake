@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plc-vision-handshake"
-version = "0.0.1"
+version = "0.1.0"
 description = "Simulated PLC <-> vision-system handshake over the S7 protocol (python-snap7)."
 readme = "README.md"
 requires-python = ">=3.11"
