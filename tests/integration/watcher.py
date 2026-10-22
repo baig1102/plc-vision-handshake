@@ -4,9 +4,12 @@ from collections.abc import Callable
 
 from plc_vision_handshake.fake_plc import FakePlc
 from plc_vision_handshake.plc_logic import Event, Verdict, VerdictMade
+from plc_vision_handshake.vision_client import VisionClient
 from plc_vision_handshake.worker import CyclicWorker
 
 WAIT_TIMEOUT_S = 5.0
+
+StartVision = Callable[..., VisionClient]  # the `start_vision` fixture
 
 
 class PlcWatcher:
