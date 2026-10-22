@@ -7,6 +7,7 @@ time) and ``VisionClient`` only moves bytes over the S7 connection.
 from __future__ import annotations
 
 import random
+import threading
 import time
 from collections.abc import Callable
 
@@ -31,9 +32,15 @@ def random_inspector(seed: int | None = None, nok_rate: float = 0.2) -> Inspecto
 
 
 class VisionLogic:
-    def __init__(self, inspect: Inspector, latency_s: float = 0.05) -> None:
+    def __init__(
+        self, inspect: Inspector, latency_s: float = 0.05, plc_watchdog_s: float = 0.5
+    ) -> None:
         self._inspect = inspect
         self._latency_s = latency_s
+        self._plc_watchdog_s = plc_watchdog_s
+        self._last_plc_heartbeat: int | None = None
+        self._plc_heartbeat_changed_at = 0.0
+        self.plc_alive = True
         self._last_started_seq = 0  # PLC never uses seq 0 for a real request
         self._busy_seq: int | None = None
         self._busy_part = 0
@@ -43,8 +50,22 @@ class VisionLogic:
 
     def step(self, db10: PlcToVision, now: float) -> VisionToPlc:
         """One poll: take DB10 as read, return DB11 to write."""
+        # Second half of the bidirectional watchdog: the PLC's heartbeat must keep
+        # changing. If it stops (PLC in STOP, program hung), say not ready and
+        # start nothing new. Recovers by itself once the heartbeat moves again;
+        # the FAULT/acknowledge decision belongs to the PLC, not to vision.
+        if db10.heartbeat != self._last_plc_heartbeat:
+            self._last_plc_heartbeat = db10.heartbeat
+            self._plc_heartbeat_changed_at = now
+        self.plc_alive = now - self._plc_heartbeat_changed_at < self._plc_watchdog_s
+
         # Each seq_id is answered exactly once, however long the trigger stays high.
-        if self._busy_seq is None and db10.trigger and db10.seq_id != self._last_started_seq:
+        if (
+            self.plc_alive
+            and self._busy_seq is None
+            and db10.trigger
+            and db10.seq_id != self._last_started_seq
+        ):
             self._last_started_seq = db10.seq_id
             self._busy_seq = db10.seq_id
             self._busy_part = db10.part_id
@@ -61,7 +82,7 @@ class VisionLogic:
             heartbeat_echo=db10.heartbeat,
             result_seq_id=self._result_seq_id,
             result=self._result,
-            ready=True,
+            ready=self.plc_alive,
         )
 
 
@@ -76,14 +97,16 @@ class VisionClient(CyclicWorker):
         inspect: Inspector | None = None,
         latency_s: float = 0.05,
         poll_s: float = 0.01,
+        plc_watchdog_s: float = 0.5,
         clock: Clock = time.monotonic,
     ) -> None:
         super().__init__(poll_s)
         self._port = port
         self._host = host
         self._clock = clock
-        self._logic = VisionLogic(inspect or random_inspector(), latency_s)
+        self._logic = VisionLogic(inspect or random_inspector(), latency_s, plc_watchdog_s)
         self._client: snap7.client.Client | None = None
+        self.plc_lost = threading.Event()  # set while the PLC heartbeat is frozen
 
     def _open(self) -> None:
         client = snap7.client.Client()
@@ -97,6 +120,11 @@ class VisionClient(CyclicWorker):
         raw = self._client.db_read(protocol.PLC_TO_VISION_DB, 0, protocol.PLC_TO_VISION_SIZE)
         db11 = self._logic.step(protocol.decode_plc_to_vision(raw), self._clock())
         self._client.db_write(protocol.VISION_TO_PLC_DB, 0, protocol.encode_vision_to_plc(db11))
+        # Set only after ready=False is in DB11, so a waiter can rely on it.
+        if self._logic.plc_alive:
+            self.plc_lost.clear()
+        else:
+            self.plc_lost.set()
 
     def _close(self) -> None:
         if self._client is not None:
