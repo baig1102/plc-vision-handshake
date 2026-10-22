@@ -4,7 +4,7 @@
 
 Concept simulation inspired by an inspection cell I commissioned. Contains no employer code.
 
-> **Interim README.** Milestones 1–5 are done; the CLI demo is in progress.
+> **Interim README.** Milestones 1–6 are done.
 > The final README (scenarios table, design decisions, demo) comes with v0.1.0.
 
 ## The problem
@@ -65,7 +65,7 @@ part's answer still sitting in DB11 can't be accepted for the current part.
 | 3 | `plc_logic.py`: PLC state machine with injected clock | ✅ done |
 | 4 | `fake_plc.py` + `vision_client.py` over snap7, first integration test | ✅ done |
 | 5 | Fault injection and failure scenarios | ✅ done |
-| 6 | CLI demo with event log | 🚧 in progress |
+| 6 | CLI demo with event log | ✅ done |
 | 7 | Final README, `v0.1.0` | ⏳ planned |
 
 ## Install and test
@@ -81,11 +81,24 @@ pytest
 ```
 
 `pytest -m "not integration"` skips the tests that open a real TCP connection.
-There is no demo command yet (milestone 6).
+
+## Run the demo
+
+```bash
+python -m plc_vision_handshake demo --scenario stale
+```
+
+Scenarios: `normal`, `nok`, `slow`, `stale`, `freeze`, `restart`, `plc-stop`.
+`--verbose` also shows every state change. Exit code 0 means the scenario ran to
+the end, including when parts were rejected; 130 means it was stopped with Ctrl+C.
+
+Or in two terminals: `python -m plc_vision_handshake plc` (Enter = next part,
+r = reset, q = quit), then `python -m plc_vision_handshake vision`, optionally
+with `--slow`, `--stale-seq`, `--freeze-heartbeat` or `--crash-after N`.
 
 ## What the tests cover
 
-51 tests, all running in CI on Python 3.11 and 3.12:
+67 tests, all running in CI on Python 3.11 and 3.12:
 
 - **Protocol (15):** encode/decode round trips, hand-written byte layouts that pin
   offsets and big-endian order, range and size checks.
@@ -99,6 +112,10 @@ There is no demo command yet (milestone 6).
   fault: slow vision → TIMEOUT, wrong seq → STALE_RESULT, frozen heartbeat →
   WATCHDOG and FAULT, vision restart → reset → accepted without reusing the old
   result, halted PLC → vision drops `ready`.
+- **Event log (4):** line format, reasons in plain words, summary.
+- **CLI (12):** the output of every demo scenario, Ctrl+C (exit 130, no
+  traceback, threads stopped; the real-signal test runs on Linux only), flag
+  parsing, usage errors.
 - **Package (1):** import smoke test.
 
 The important guards were also mutation-checked: each one was broken on purpose
