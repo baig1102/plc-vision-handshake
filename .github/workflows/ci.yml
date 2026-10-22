@@ -8,6 +8,8 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # A hung thread or socket must fail the job, not burn the default 6 hours.
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
