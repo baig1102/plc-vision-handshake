@@ -1,9 +1,9 @@
 import contextlib
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from watcher import PlcWatcher
+from watcher import PlcWatcher, StartVision
 
 from plc_vision_handshake.fake_plc import FakePlc
 from plc_vision_handshake.plc_logic import PlcConfig
@@ -14,8 +14,6 @@ from plc_vision_handshake.vision_client import VisionClient
 # from startup, and CI runners can be slow.
 CONFIG = PlcConfig(result_timeout_s=1.0, watchdog_timeout_s=1.0)
 STARTUP_TIMEOUT_S = 5.0
-
-StartVision = Callable[..., VisionClient]
 
 
 def always_ok(part_id: int) -> Result:
@@ -39,7 +37,9 @@ def watcher(plc: FakePlc) -> PlcWatcher:
 
 @pytest.fixture
 def start_vision(plc: FakePlc, watcher: PlcWatcher) -> Iterator[StartVision]:
-    """Factory: start a VisionClient on the PLC's port (always OK, 20 ms by default).
+    """Factory: start a VisionClient on the PLC's port (always OK, 20 ms by default)
+    and wait until the PLC has seen ready=True, so a part submitted right after
+    can't get NOT_READY.
 
     Depends on `plc`, so pytest tears it down first: every client disconnects
     while the server is still there. ExitStack stops all of them even if one
@@ -54,14 +54,12 @@ def start_vision(plc: FakePlc, watcher: PlcWatcher) -> Iterator[StartVision]:
             client.start()
             stack.callback(client.stop)
             watcher.workers.append(client)
+            plc.wait_until_vision_ready(STARTUP_TIMEOUT_S)
             return client
 
         yield start
 
 
 @pytest.fixture
-def vision(plc: FakePlc, start_vision: StartVision) -> VisionClient:
-    client = start_vision()
-    # Submitting parts before the PLC has seen ready=True would give NOT_READY.
-    plc.wait_until_vision_ready(STARTUP_TIMEOUT_S)
-    return client
+def vision(start_vision: StartVision) -> VisionClient:
+    return start_vision()
