@@ -46,3 +46,20 @@ def test_heartbeat_echo_keeps_running_during_inspection() -> None:
 def test_random_inspector_is_repeatable_with_a_seed() -> None:
     a, b = random_inspector(seed=7), random_inspector(seed=7)
     assert [a(i) for i in range(50)] == [b(i) for i in range(50)]
+
+
+def test_frozen_plc_heartbeat_drops_ready_and_blocks_new_inspections() -> None:
+    inspector = CountingInspector()
+    vision = VisionLogic(inspector, latency_s=0.0, plc_watchdog_s=0.5)
+
+    assert vision.step(db10(1, trigger=False, seq_id=0), now=0.0).ready  # window starts
+    assert vision.step(db10(1, trigger=False, seq_id=0), now=0.25).ready
+
+    out = vision.step(db10(1, trigger=True, seq_id=1, part_id=9), now=0.5)  # 0.5 s frozen
+    assert out.ready is False
+    assert (out.result_seq_id, out.result) == (0, Result.NONE)
+    assert inspector.calls == []  # no new inspection while the PLC looks dead
+
+    out = vision.step(db10(2, trigger=True, seq_id=1, part_id=9), now=0.75)  # PLC is back
+    assert out.ready is True
+    assert inspector.calls == [9]
