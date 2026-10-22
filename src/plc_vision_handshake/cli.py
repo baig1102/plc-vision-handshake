@@ -5,6 +5,7 @@ Exit codes:
      correct outcome of a fault scenario, not an error.
   1  something went wrong (port in use, a worker crashed, a wait timed out).
   2  bad command line (argparse).
+  130  interrupted with Ctrl+C; PLC and vision were stopped the normal way first.
 
 Only the main thread prints. The PLC and vision threads never do; their events
 reach the main thread through the PLC's event queue.
@@ -211,6 +212,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         result: int = args.handler(args)
         return result
+    except KeyboardInterrupt:
+        # By now the handler's ExitStack has unwound: vision and PLC went through
+        # the same stop() as in the tests. Nothing left to clean up, no traceback.
+        print_line("interrupted, PLC and vision stopped")
+        return 130
     except Exception as exc:
         if args.debug:
             raise
