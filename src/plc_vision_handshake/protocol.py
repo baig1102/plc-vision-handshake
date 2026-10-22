@@ -25,6 +25,14 @@ from snap7 import util
 UINT16_MAX = 0xFFFF
 UINT32_MAX = 0xFFFF_FFFF
 
+# --- Connection --------------------------------------------------------------
+# Real S7 uses TCP port 102, which needs admin rights; the simulation defaults
+# to a high port. Rack 0 / slot 1 is the usual addressing for a compact CPU.
+DEFAULT_PORT = 1102
+LOCALHOST = "127.0.0.1"
+RACK = 0
+SLOT = 1
+
 # --- DB10: PLC -> Vision -----------------------------------------------------
 PLC_TO_VISION_DB = 10
 PLC_HEARTBEAT = 0  # UInt   counter, incremented by the PLC every cycle
