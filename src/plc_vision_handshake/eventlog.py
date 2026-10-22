@@ -66,7 +66,8 @@ class EventLog:
                 event.time, "VERDICT", f"REJECT  {v.reason.value}", v.seq_id, v.part_id, note
             )
         if event.new is State.FAULT:
-            return self.line(event.time, "PLC", "FAULT", note="no new triggers until reset")
+            note = "vision heartbeat stopped, no new triggers until reset"
+            return self.line(event.time, "PLC", "FAULT", note=note)
         if (event.old, event.new) == (State.FAULT, State.IDLE):
             return self.line(event.time, "PLC", "reset", note="FAULT acknowledged")
         if self._verbose:
