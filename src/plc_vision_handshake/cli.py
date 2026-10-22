@@ -1,5 +1,8 @@
 """Command line: ``python -m plc_vision_handshake demo --scenario <name>``.
 
+Or in two terminals: ``... plc`` (Enter = next part, r = reset, q = quit), then
+``... vision [--slow] [--stale-seq] [--freeze-heartbeat] [--crash-after N]``.
+
 Exit codes:
   0  the scenario ran to the end. That includes rejected parts: rejecting is the
      correct outcome of a fault scenario, not an error.
@@ -15,7 +18,10 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import logging
+import queue
 import sys
+import threading
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -25,7 +31,12 @@ from plc_vision_handshake.eventlog import EventLog
 from plc_vision_handshake.fake_plc import FakePlc
 from plc_vision_handshake.plc_logic import Event, PlcConfig, State, StateChanged
 from plc_vision_handshake.protocol import Result
-from plc_vision_handshake.vision_client import Inspector, VisionClient, VisionFaults
+from plc_vision_handshake.vision_client import (
+    Inspector,
+    VisionClient,
+    VisionFaults,
+    random_inspector,
+)
 from plc_vision_handshake.watch import WAIT_TIMEOUT_S, PlcWatcher
 
 FIRST_PART_ID = 1001
@@ -55,12 +66,17 @@ class Demo:
     """One demo run: PLC, vision clients and the log. Used from the main thread only."""
 
     def __init__(
-        self, stack: contextlib.ExitStack, port: int, verbose: bool, out: Callable[[str], None]
+        self,
+        stack: contextlib.ExitStack,
+        port: int,
+        verbose: bool,
+        out: Callable[[str], None],
+        fault_hint: str = "no new triggers until reset",
     ) -> None:
         self._stack = stack
         self._out = out
         config = PlcConfig()
-        self.log = EventLog(time.monotonic(), config.result_timeout_s, verbose)
+        self.log = EventLog(time.monotonic(), config.result_timeout_s, verbose, fault_hint)
         self.plc = FakePlc(port or None, config=config)  # port 0 -> any free port
         self.plc.start()
         stack.callback(self.plc.stop)  # ExitStack is LIFO: vision clients stop first
@@ -184,6 +200,76 @@ def run_demo(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- two terminals ----------------------------------------------------------------
+
+
+def _read_commands(commands: queue.Queue[str]) -> None:
+    """stdin reader thread: only reads, never prints. End of input means quit."""
+    for line in sys.stdin:
+        commands.put(line.strip().lower())
+    commands.put("q")
+
+
+def run_plc(args: argparse.Namespace) -> int:
+    commands: queue.Queue[str] = queue.Queue()
+    threading.Thread(target=_read_commands, args=(commands,), name="stdin", daemon=True).start()
+    with contextlib.ExitStack() as stack:
+        # Vision usually starts after the PLC, so the first FAULT is expected.
+        demo = Demo(stack, args.port, args.verbose, print_line, "start vision, then press r")
+        print_line("Enter = next part, r = reset, q = quit")
+        part_id = FIRST_PART_ID
+        vision_seen = False
+        while True:
+            demo.watcher.drain()
+            demo.plc.raise_if_failed()
+            if not vision_seen and demo.plc.vision_ready.is_set():
+                vision_seen = True
+                demo.say("VISION", "ready", note="DB11 says ready=True")
+            try:
+                command = commands.get(timeout=0.1)  # short wait: Ctrl+C gets through
+            except queue.Empty:
+                continue
+            if command == "q":
+                return 0
+            if command == "r":
+                demo.plc.reset()
+            elif command == "":
+                demo.say("PART", "queued", part_id=part_id)
+                demo.plc.submit_part(part_id)
+                part_id += 1
+            else:
+                print_line(f"unknown command {command!r}: Enter, r or q")
+
+
+def faults_from_args(args: argparse.Namespace) -> VisionFaults:
+    return VisionFaults(args.slow, args.stale_seq, args.freeze_heartbeat, args.crash_after)
+
+
+def run_vision(args: argparse.Namespace) -> int:
+    log = EventLog(time.monotonic(), result_timeout_s=0.0)
+    vision = VisionClient(
+        args.port, inspect=random_inspector(args.seed), faults=faults_from_args(args)
+    )
+    vision.start()  # raises if no PLC is listening on the port
+    print_line(log.line(time.monotonic(), "VISION", f"connected to port {args.port}"))
+    try:
+        plc_lost = False
+        while not vision.crashed.wait(0.1):  # short wait: Ctrl+C gets through
+            vision.raise_if_failed()
+            if vision.plc_lost.is_set() != plc_lost:
+                plc_lost = not plc_lost
+                text = "PLC heartbeat lost, ready=False" if plc_lost else "PLC heartbeat back"
+                print_line(log.line(time.monotonic(), "VISION", text))
+        print_line(log.line(time.monotonic(), "VISION", "crashed (simulated)"))
+        return 0
+    except RuntimeError:  # the loop died: the PLC went away
+        print_line(log.line(time.monotonic(), "VISION", "lost the connection to the PLC"))
+        return 1
+    finally:
+        with contextlib.suppress(RuntimeError):  # loop error already reported above
+            vision.stop()
+
+
 # --- command line ---------------------------------------------------------------
 
 
@@ -198,10 +284,27 @@ def build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--port", type=int, default=protocol.DEFAULT_PORT, help="0 = any free")
     demo.add_argument("--verbose", action="store_true", help="also show every state change")
     demo.set_defaults(handler=run_demo)
+
+    plc = commands.add_parser("plc", help="fake PLC only, driven from the keyboard")
+    plc.add_argument("--port", type=int, default=protocol.DEFAULT_PORT)
+    plc.add_argument("--verbose", action="store_true")
+    plc.set_defaults(handler=run_plc)
+
+    vision = commands.add_parser("vision", help="vision client only, connects to a running plc")
+    vision.add_argument("--port", type=int, default=protocol.DEFAULT_PORT)
+    vision.add_argument("--seed", type=int, help="seed for the random OK/NOK results")
+    vision.add_argument("--slow", action="store_true", help="answer after the result timeout")
+    vision.add_argument("--stale-seq", action="store_true", help="answer with the wrong seq_id")
+    vision.add_argument("--freeze-heartbeat", action="store_true", help="hang at the first part")
+    vision.add_argument("--crash-after", type=int, metavar="N", help="crash after N answers")
+    vision.set_defaults(handler=run_vision)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    # python-snap7 logs connection errors from the worker threads; our own
+    # messages already report them, and only the main thread should print.
+    logging.getLogger("snap7").setLevel(logging.CRITICAL)
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "demo" and args.parts is not None:
