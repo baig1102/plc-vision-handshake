@@ -7,7 +7,9 @@ from plc_vision_handshake.plc_logic import (
     PlcLogic,
     RejectReason,
     State,
+    StateChanged,
     Verdict,
+    VerdictMade,
 )
 from plc_vision_handshake.protocol import PlcToVision, Result, VisionToPlc
 
@@ -321,3 +323,52 @@ def test_seq_id_wraps_to_one_and_skips_zero() -> None:
     rig.plc._seq_id = 0xFFFF
     rig.plc.request_inspection(part_id=1)
     assert rig.cycle().seq_id == 1
+
+
+def test_events_for_an_accepted_part_in_order() -> None:
+    rig = Rig()
+    rig.plc.request_inspection(part_id=8)
+    rig.cycle()  # t=0.25
+    rig.cycle()  # t=0.50
+    rig.answer(Result.OK)
+    rig.cycle()  # t=0.75
+    rig.cycle()  # t=1.00
+    accepted = Verdict(seq_id=1, part_id=8, accepted=True)
+    assert rig.plc.drain_events() == [
+        StateChanged(0.25, State.IDLE, State.TRIGGERED),
+        StateChanged(0.50, State.TRIGGERED, State.WAIT_RESULT),
+        VerdictMade(0.75, accepted),  # the verdict comes before the state it causes
+        StateChanged(0.75, State.WAIT_RESULT, State.ACCEPT),
+        StateChanged(1.00, State.ACCEPT, State.IDLE),
+    ]
+    assert rig.plc.drain_events() == []  # draining empties the list
+
+
+def test_watchdog_verdict_is_reported_although_state_never_rejects() -> None:
+    rig = Rig(PlcConfig(result_timeout_s=2.0, watchdog_timeout_s=0.5))
+    rig.trigger(part_id=6)
+    rig.plc.drain_events()
+    rig.freeze_echo = True
+    for _ in range(10):
+        if rig.state() is State.FAULT:
+            break
+        rig.cycle()
+
+    events = rig.plc.drain_events()
+    watchdog = Verdict(seq_id=1, part_id=6, accepted=False, reason=RejectReason.WATCHDOG)
+    assert events == [
+        VerdictMade(rig.clock.now, watchdog),
+        StateChanged(rig.clock.now, State.WAIT_RESULT, State.FAULT),
+    ]
+
+
+def test_reset_reports_leaving_fault() -> None:
+    rig = Rig()
+    rig.freeze_echo = True
+    for _ in range(3):
+        rig.cycle()
+    assert rig.state() is State.FAULT
+    rig.plc.drain_events()
+
+    rig.plc.reset()
+    assert rig.plc.drain_events() == [StateChanged(rig.clock.now, State.FAULT, State.IDLE)]
