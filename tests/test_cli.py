@@ -6,6 +6,15 @@ import threading
 import pytest
 
 from plc_vision_handshake import cli
+from plc_vision_handshake.vision_client import VisionFaults
+
+
+def test_vision_command_maps_fault_flags() -> None:
+    args = cli.build_parser().parse_args(
+        ["vision", "--port", "1103", "--slow", "--stale-seq", "--crash-after", "2"]
+    )
+    assert args.port == 1103
+    assert cli.faults_from_args(args) == VisionFaults(slow=True, stale_seq=True, crash_after=2)
 
 
 def worker_threads_alive() -> list[str]:

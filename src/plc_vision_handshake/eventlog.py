@@ -30,10 +30,17 @@ _REASON_TEXT = {
 
 
 class EventLog:
-    def __init__(self, t0: float, result_timeout_s: float, verbose: bool = False) -> None:
+    def __init__(
+        self,
+        t0: float,
+        result_timeout_s: float,
+        verbose: bool = False,
+        fault_hint: str = "no new triggers until reset",
+    ) -> None:
         self._t0 = t0
         self._result_timeout_s = result_timeout_s
         self._verbose = verbose
+        self._fault_hint = fault_hint
         self.verdicts: list[Verdict] = []
 
     def line(
@@ -66,7 +73,7 @@ class EventLog:
                 event.time, "VERDICT", f"REJECT  {v.reason.value}", v.seq_id, v.part_id, note
             )
         if event.new is State.FAULT:
-            note = "vision heartbeat stopped, no new triggers until reset"
+            note = f"vision heartbeat stopped - {self._fault_hint}"
             return self.line(event.time, "PLC", "FAULT", note=note)
         if (event.old, event.new) == (State.FAULT, State.IDLE):
             return self.line(event.time, "PLC", "reset", note="FAULT acknowledged")
