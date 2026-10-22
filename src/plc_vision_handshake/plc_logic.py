@@ -14,6 +14,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
+from typing import TypeAlias
 
 from plc_vision_handshake.protocol import (
     UINT16_MAX,
@@ -66,6 +67,22 @@ class Verdict:
 
 
 @dataclass(frozen=True)
+class StateChanged:
+    time: float
+    old: State
+    new: State
+
+
+@dataclass(frozen=True)
+class VerdictMade:
+    time: float
+    verdict: Verdict
+
+
+Event: TypeAlias = StateChanged | VerdictMade
+
+
+@dataclass(frozen=True)
 class PlcConfig:
     result_timeout_s: float = 1.0
     watchdog_timeout_s: float = 0.5
@@ -85,6 +102,7 @@ class PlcLogic:
         self._saw_stale = False
         self._last_echo: int | None = None
         self._echo_changed_at = clock()  # vision gets one watchdog window from startup
+        self._events: list[Event] = []
         self.last_verdict: Verdict | None = None
 
     @property
@@ -117,13 +135,27 @@ class PlcLogic:
         """
         if self._state is not State.FAULT:
             return False
-        self._echo_changed_at = self._clock()
+        now = self._clock()
+        self._echo_changed_at = now
         self._state = State.IDLE
+        self._events.append(StateChanged(now, State.FAULT, State.IDLE))
         return True
+
+    def drain_events(self) -> list[Event]:
+        """Return everything that happened since the last call, oldest first.
+
+        This is the only place a verdict is guaranteed to show up: a WATCHDOG
+        verdict goes straight to FAULT and never passes through REJECT. The
+        caller must drain regularly (the fake PLC does it every cycle);
+        otherwise the list keeps growing.
+        """
+        events, self._events = self._events, []
+        return events
 
     def cycle(self, inputs: VisionToPlc) -> PlcToVision:
         """Run one scan cycle: take DB11 as read, return DB10 to write."""
         now = self._clock()
+        old_state = self._state
         self._heartbeat = (self._heartbeat + 1) & UINT16_MAX
 
         # Watchdog before anything else: if vision is dead, a result read in the
@@ -143,6 +175,11 @@ class PlcLogic:
         elif self._state in (State.ACCEPT, State.REJECT):
             self._state = State.IDLE
 
+        # At most one transition per cycle, so comparing start and end is enough.
+        # Any verdict event from this cycle is already in the list, before it.
+        if self._state is not old_state:
+            self._events.append(StateChanged(now, old_state, self._state))
+
         return PlcToVision(
             heartbeat=self._heartbeat,
             # Level, not pulse: high for the whole request, low again in the
@@ -161,13 +198,13 @@ class PlcLogic:
         if self._state is State.FAULT:
             return
         if now - self._echo_changed_at >= self._config.watchdog_timeout_s:
-            self._enter_fault()
+            self._enter_fault(now)
 
-    def _enter_fault(self) -> None:
+    def _enter_fault(self, now: float) -> None:
         if self._state in (State.TRIGGERED, State.WAIT_RESULT):
-            self._record_verdict(self._seq_id, self._part_id, RejectReason.WATCHDOG)
+            self._record_verdict(now, self._seq_id, self._part_id, RejectReason.WATCHDOG)
         elif self._requested_part is not None:  # accepted but never triggered
-            self._record_verdict(0, self._requested_part, RejectReason.WATCHDOG)
+            self._record_verdict(now, 0, self._requested_part, RejectReason.WATCHDOG)
         self._requested_part = None
         self._state = State.FAULT
 
@@ -176,7 +213,7 @@ class PlcLogic:
         if not inputs.ready:
             # Don't trigger a vision system that says it can't inspect. The part
             # can't wait on the table forever, so it is rejected right away.
-            self._record_verdict(0, part_id, RejectReason.NOT_READY)
+            self._record_verdict(now, 0, part_id, RejectReason.NOT_READY)
             self._state = State.REJECT
             return
         # Wrap 65535 -> 1 and skip 0: DB11 starts all-zero, so seq 0 must never
@@ -205,20 +242,23 @@ class PlcLogic:
     def _evaluate_result(self, inputs: VisionToPlc, now: float) -> None:
         # Deadline first: a result read after the deadline is too late (fail-to-reject).
         if now - self._trigger_time >= self._config.result_timeout_s:
-            self._finish(RejectReason.STALE_RESULT if self._saw_stale else RejectReason.TIMEOUT)
+            reason = RejectReason.STALE_RESULT if self._saw_stale else RejectReason.TIMEOUT
+            self._finish(now, reason)
             return
         if inputs.result_seq_id != self._seq_id or inputs.result is Result.NONE:
             return  # no answer for *this* request yet
         if inputs.result is Result.OK:
-            self._finish(None)
+            self._finish(now, None)
         else:
-            self._finish(_REJECT_REASON_FOR_RESULT[inputs.result])
+            self._finish(now, _REJECT_REASON_FOR_RESULT[inputs.result])
 
-    def _finish(self, reason: RejectReason | None) -> None:
-        self._record_verdict(self._seq_id, self._part_id, reason)
+    def _finish(self, now: float, reason: RejectReason | None) -> None:
+        self._record_verdict(now, self._seq_id, self._part_id, reason)
         self._state = State.ACCEPT if reason is None else State.REJECT
 
-    def _record_verdict(self, seq_id: int, part_id: int, reason: RejectReason | None) -> None:
-        self.last_verdict = Verdict(
-            seq_id=seq_id, part_id=part_id, accepted=reason is None, reason=reason
-        )
+    def _record_verdict(
+        self, now: float, seq_id: int, part_id: int, reason: RejectReason | None
+    ) -> None:
+        verdict = Verdict(seq_id=seq_id, part_id=part_id, accepted=reason is None, reason=reason)
+        self.last_verdict = verdict
+        self._events.append(VerdictMade(now, verdict))
