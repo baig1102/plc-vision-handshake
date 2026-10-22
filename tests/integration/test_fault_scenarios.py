@@ -5,10 +5,11 @@ Every wait blocks on an event or queue with a deadline; nothing sleeps.
 """
 
 import pytest
-from watcher import PlcWatcher, StartVision
+from watcher import WAIT_TIMEOUT_S, PlcWatcher, StartVision
 
 from plc_vision_handshake.fake_plc import FakePlc
 from plc_vision_handshake.plc_logic import Event, RejectReason, State, StateChanged, Verdict
+from plc_vision_handshake.protocol import Result
 from plc_vision_handshake.vision_client import VisionFaults
 
 pytestmark = pytest.mark.integration
@@ -16,6 +17,19 @@ pytestmark = pytest.mark.integration
 
 def is_fault(event: Event) -> bool:
     return isinstance(event, StateChanged) and event.new is State.FAULT
+
+
+def is_reset(event: Event) -> bool:
+    return isinstance(event, StateChanged) and (event.old, event.new) == (State.FAULT, State.IDLE)
+
+
+class RecordingInspector:
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+
+    def __call__(self, part_id: int) -> Result:
+        self.calls.append(part_id)
+        return Result.OK
 
 
 def test_slow_vision_times_out_instead_of_tripping_the_watchdog(
@@ -53,3 +67,39 @@ def test_frozen_heartbeat_faults_and_rejects_the_part_in_flight(
         seq_id=1, part_id=203, accepted=False, reason=RejectReason.WATCHDOG
     )
     watcher.wait_for(is_fault, "FAULT after the WATCHDOG verdict")
+
+
+def test_vision_restart_recovers_after_reset_without_reusing_the_old_result(
+    plc: FakePlc, start_vision: StartVision, watcher: PlcWatcher
+) -> None:
+    first = start_vision(faults=VisionFaults(crash_after=1))
+    plc.submit_part(301)
+    assert watcher.verdict() == Verdict(seq_id=1, part_id=301, accepted=True)
+
+    assert first.crashed.wait(WAIT_TIMEOUT_S), "vision did not crash after one part"
+    watcher.wait_for(is_fault, "FAULT after the vision crash")
+    leftover = plc.read_db11()
+    assert (leftover.result_seq_id, leftover.result) == (1, Result.OK)  # still in DB11
+
+    plc.reset()
+    watcher.wait_for(is_reset, "FAULT -> IDLE after reset")
+    inspector = RecordingInspector()
+    start_vision(inspect=inspector)
+
+    # The new instance's first write replaced the leftover before anything else.
+    clean = plc.read_db11()
+    assert (clean.result_seq_id, clean.result, clean.ready) == (0, Result.NONE, True)
+
+    plc.submit_part(302)
+    assert watcher.verdict() == Verdict(seq_id=2, part_id=302, accepted=True)
+    assert inspector.calls == [302]  # accepted because the new instance inspected it
+
+
+def test_halted_plc_makes_vision_drop_ready(plc: FakePlc, start_vision: StartVision) -> None:
+    vision = start_vision(plc_watchdog_s=0.5)
+    assert plc.read_db11().ready
+
+    plc.halt()  # CPU in STOP: heartbeat freezes, the S7 server keeps answering
+
+    assert vision.plc_lost.wait(WAIT_TIMEOUT_S), "vision did not notice the halted PLC"
+    assert plc.read_db11().ready is False
