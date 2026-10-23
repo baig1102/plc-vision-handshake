@@ -144,9 +144,11 @@ scenario restart: vision crashes and is restarted after a reset
 **Why a sequence ID, and never 0.** DB11 always holds the last answer vision
 wrote, so "a result is there" says nothing about which part it belongs to. Every
 trigger gets a new `seq_id`, and I only evaluate a result whose `result_seq_id`
-matches it. The counter wraps from 65535 to 1 and skips 0, because DB11 starts
-all-zero and seq 0 would match that empty block; a reset keeps the counter, so
-an old answer can never match the next request either.
+matches it. The counter wraps from 65535 to 1 and skips 0: 0 means "no request
+yet", which is what an empty DB11 holds, so a real request never uses it (an
+empty block is also ignored because its result is NONE; two independent guards).
+A reset keeps the counter, so an old answer can never match the next request
+either.
 
 **Why a bidirectional watchdog.** A result timeout only tells me that one answer
 was late, not whether the other side is still alive. So the PLC requires the
