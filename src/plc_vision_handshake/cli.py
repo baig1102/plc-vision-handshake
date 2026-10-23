@@ -263,7 +263,7 @@ def run_vision(args: argparse.Namespace) -> int:
         print_line(log.line(time.monotonic(), "VISION", "crashed (simulated)"))
         return 0
     except RuntimeError:  # the loop died: the PLC went away
-        print_line(log.line(time.monotonic(), "VISION", "lost the connection to the PLC"))
+        print(f"error: lost the connection to the PLC on port {args.port}", file=sys.stderr)
         return 1
     finally:
         with contextlib.suppress(RuntimeError):  # loop error already reported above
